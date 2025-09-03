@@ -1,13 +1,11 @@
-// Simple Markdown to plain text converter
 function markdownToHtml(markdown) {
-    // Remove markdown formatting
     let text = markdown
-        .replace(/\*\*([^*]+)\*\*/g, '$1')  // Remove bold
-        .replace(/\*([^*]+)\*/g, '$1')       // Remove italic
-        .replace(/`([^`]+)`/g, '$1')          // Remove code
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // Remove links
-        .replace(/^#+\s*/gm, '')              // Remove headers
-        .replace(/\n{3,}/g, '\n\n')          // Normalize newlines
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/\*([^*]+)\*/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/^#+\s*/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
     
     return text;
@@ -20,6 +18,211 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectedInterestsContainer = document.getElementById('selectedInterests');
     const preferencesInput = document.getElementById('preferences');
     const selectedInterests = new Set();
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const fileList = document.getElementById('fileList');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const documentList = document.getElementById('documentList');
+
+    if (fileInput && uploadBtn) {
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        uploadBtn.addEventListener('click', async () => {
+            if (fileInput.files.length === 0) {
+                showStatus('Please select files to upload first', 'error');
+                return;
+            }
+            await handleFileUpload(fileInput.files);
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        dropZone.addEventListener('drop', handleDrop, false);
+    }
+
+    async function handleFileUpload(files) {
+        const formData = new FormData();
+        const validTypes = [
+            'application/pdf', 
+            'text/plain', 
+            'text/markdown', 
+            'text/x-markdown',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ];
+        
+        let validFiles = 0;
+        for (const file of files) {
+            if (validTypes.includes(file.type) || file.name.match(/\.(pdf|txt|md|doc|docx)$/i)) {
+                formData.append('files', file);
+                validFiles++;
+                console.log(`Adding file: ${file.name}, type: ${file.type}`);
+            } else {
+                console.warn(`Skipping unsupported file: ${file.name}, type: ${file.type}`);
+            }
+        }
+
+        if (validFiles === 0) {
+            const errorMsg = 'No valid files selected. Please upload PDF, TXT, MD, DOC, or DOCX files only.';
+            console.error(errorMsg);
+            showStatus(errorMsg, 'error');
+            return false;
+        }
+
+        showStatus('Uploading files...', 'uploading');
+        uploadBtn.disabled = true;
+
+        try {
+            console.log('Sending upload request to /api/upload');
+            const response = await fetch('http://localhost:5000/api/upload', {
+                method: 'POST',
+                body: formData,
+                // Don't set Content-Type header, let the browser set it with the correct boundary
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+
+            console.log('Upload response status:', response.status);
+            
+            let result;
+            try {
+                result = await response.json();
+                console.log('Upload response:', result);
+            } catch (jsonError) {
+                console.error('Error parsing JSON response:', jsonError);
+                throw new Error('Invalid response from server');
+            }
+
+            if (!response.ok) {
+                const errorMsg = result.detail || result.message || 'File upload failed';
+                console.error('Upload failed:', errorMsg);
+                throw new Error(errorMsg);
+            }
+
+            showStatus('Files uploaded and processed successfully!', 'success');
+            updateDocumentList();
+            fileInput.value = ''; 
+            updateFileList([]);
+
+        } catch (error) {
+            console.error('Upload error:', error);
+            const errorMessage = error.message || 'Failed to upload files. Please try again.';
+            showStatus(`Error: ${errorMessage}`, 'error');
+        } finally {
+            uploadBtn.disabled = false;
+        }
+    }
+
+    function highlight(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add('border-blue-500', 'bg-blue-50');
+    }
+
+    function unhighlight(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+    }
+
+    function handleDrop(e) {
+        e.preventDefault();
+        unhighlight(e);
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        fileInput.files = files;
+        updateFileList(files);
+    }
+
+    function updateFileList(files) {
+        fileList.innerHTML = '';
+        if (files.length === 0) return;
+
+        const list = document.createElement('ul');
+        list.className = 'space-y-2';
+
+        for (const file of files) {
+            const item = document.createElement('li');
+            item.className = 'flex items-center justify-between text-sm';
+            item.innerHTML = `
+                <span class="truncate">${file.name}</span>
+                <span class="text-gray-500 text-xs">${formatFileSize(file.size)}</span>
+            `;
+            list.appendChild(item);
+        }
+
+        fileList.appendChild(list);
+    }
+
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function showStatus(message, type = 'info') {
+        if (!uploadStatus) return;
+
+        uploadStatus.className = 'mt-4 p-3 rounded-md';
+        uploadStatus.innerHTML = '';
+
+        const icon = {
+            success: '✅',
+            error: '❌',
+            info: 'ℹ️',
+            uploading: '⏳'
+        }[type] || 'ℹ️';
+
+        uploadStatus.innerHTML = `
+            <div class="flex items-center space-x-2 text-sm">
+                <span>${icon}</span>
+                <span>${message}</span>
+            </div>
+        `;
+    }
+
+        async function updateDocumentList() {
+        try {
+            const response = await fetch('/api/documents');
+            const result = await response.json();
+
+            if (response.ok && result.documents && result.documents.length > 0) {
+                const list = document.createElement('div');
+                list.className = 'space-y-2';
+
+                result.documents.forEach(doc => {
+                    const item = document.createElement('div');
+                    item.className = 'flex items-center justify-between text-sm p-2 hover:bg-gray-50 rounded';
+                    item.innerHTML = `
+                        <span class="truncate">${doc.name}</span>
+                        <span class="text-gray-500 text-xs">${formatFileSize(doc.size)}</span>
+                    `;
+                    list.appendChild(item);
+                });
+
+                documentList.innerHTML = '';
+                documentList.appendChild(list);
+            } else {
+                documentList.innerHTML = '<p class="text-sm text-gray-500 text-center py-4">No documents uploaded yet</p>';
+            }
+        } catch (error) {
+            console.error('Error fetching documents:', error);
+            documentList.innerHTML = '<p class="text-sm text-red-500 text-center py-4">Error loading documents</p>';
+        }
+    }
+
+        updateDocumentList();
 
     interestBtns.forEach(btn => {
         btn.addEventListener('click', function() {
@@ -87,233 +290,324 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     const form = document.getElementById('itineraryForm');
+    const newPlanBtn = document.getElementById('new-plan-btn');
+    
     if (!form) return;
+    
+    // Add event listener for the new plan button
+    if (newPlanBtn) {
+        newPlanBtn.addEventListener('click', function() {
+            // Scroll to the form
+            form.scrollIntoView({ behavior: 'smooth' });
+            // Reset the form
+            form.reset();
+            // Clear any existing results
+            const resultsDiv = document.getElementById('results');
+            if (resultsDiv) {
+                resultsDiv.classList.add('hidden');
+            }
+            // Clear selected interests
+            const selectedInterests = document.getElementById('selectedInterests');
+            if (selectedInterests) {
+                selectedInterests.innerHTML = '';
+            }
+            // Reset the preferences hidden input
+            const preferencesInput = document.getElementById('preferences');
+            if (preferencesInput) {
+                preferencesInput.value = '';
+            }
+        });
+    }
 
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
+    const style = document.createElement('style');
+    style.textContent = `
+        /* Position the title at the bottom of the content */
+        .bg-white {
+            display: flex;
+            flex-direction: column;
+        }
         
-        const button = form.querySelector('button[type="submit"]');
-        const buttonText = button.innerHTML;
-        const resultsDiv = document.getElementById('results');
+        #itinerary-content {
+            order: 1;
+        }
         
-        // Show loading state
-        button.disabled = true;
-        button.innerHTML = `
-            <svg class="animate-spin -ml-1 mr-2 h-5 w-5 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            Planning your trip...
-        `;
+        .itinerary-title {
+            order: 2;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
         
-        if (resultsDiv) resultsDiv.innerHTML = '';
+        .spinner {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden { display: none; }
+    `;
+    document.head.appendChild(style);
+
+        form.addEventListener('submit', generateItinerary);
+
+    async function generateItinerary(event) {
+        event.preventDefault();
+        
+        const city = document.getElementById('city').value.trim();
+        const days = document.getElementById('days').value;
+        const preferences = document.getElementById('preferences').value.trim();
+        const generateButton = document.getElementById('generate-itinerary-btn');
+        const spinner = generateButton ? generateButton.querySelector('.spinner') : null;
+        
+        if (spinner) spinner.classList.remove('hidden');
         
         try {
-            if (resultsDiv) {
-                resultsDiv.classList.remove('hidden');
-                resultsDiv.innerHTML = `
-                    <div class="mt-8 p-6 bg-white rounded-lg shadow-md text-center">
-                        <div class="flex flex-col items-center justify-center py-8">
-                            <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-                            <h3 class="text-lg font-medium text-gray-900 mb-2">Crafting your perfect itinerary</h3>
-                            <p class="text-gray-500">This may take a moment as we gather the best recommendations for you...</p>
-                        </div>
-                    </div>
-                `;
-            }
-            
             const response = await fetch('/api/generate-itinerary', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    city: form.city.value,
-                    days: parseInt(form.days.value),
-                    preferences: form.preferences.value
+                    destination: city,
+                    duration: parseInt(days, 10),
+                    preferences: preferences || 'No specific preferences'
                 })
             });
-            
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to generate itinerary');
-            }
-            
+
             const data = await response.json();
             
-            if (data.status !== 'success') {
-                throw new Error('Failed to generate itinerary');
+            if (!response.ok) {
+                console.error('API Error:', data);
+                throw new Error(data.detail?.message || 'Failed to generate itinerary');
             }
             
-            // Get the response and convert markdown to HTML
-            let formattedItinerary = markdownToHtml(data.data.answer);
-            
-            // Simple formatting for day sections
-            let daySections = [];
-            const dayRegex = /(?:<h[12]>\s*)?(?:Day\s+\d+)(?:\s*<\/h[12]>)?([\s\S]*?)(?=<h[12]>\s*Day\s+\d+\s*<\/h[12]>|$)/gi;
-            let match;
-            
-            // Extract each day's content
-            const dayContent = formattedItinerary;
-            while ((match = dayRegex.exec(dayContent)) !== null) {
-                const content = match[1].trim();
-                if (content) {
-                    daySections.push(content);
-                }
-            }
-            
-            let finalItinerary = '';
-            
-            if (daySections.length > 0) {
-                finalItinerary = daySections.map((dayContent, index) => {
-                    const activities = [];
-                    let currentActivity = null;
-                    
-                    const lines = dayContent.split('\n').filter(line => line.trim());
-                    
-                    lines.forEach(line => {
-                        line = line.trim();
-                        const timeMatch = line.match(/\*\s*\*\*(.*?):\*\*/);
-                        if (timeMatch) {
-                            if (currentActivity) {
-                                activities.push(currentActivity);
-                            }
-                            currentActivity = {
-                                time: timeMatch[1].trim(),
-                                description: line.replace(/\*\*.*?\*\*/, '').replace(/^[\s*:]+/, '').trim()
-                            };
-                        } else if (currentActivity) {
-                            if (line.startsWith('+')) {
-                                currentActivity.description += '<br>• ' + line.replace(/^[\s+]+/, '');
-                            } else {
-                                currentActivity.description += ' ' + line;
-                            }
-                        } else if (line) {
-                            activities.push({
-                                time: '',
-                                description: line.replace(/\*\*/g, '')
-                            });
-                        }
-                    });
-                    
-                    if (currentActivity) {
-                        activities.push(currentActivity);
-                    }
-                    
-                    if (activities.length === 0) return '';
-                    
-                    let dayHtml = `
-                        <div class="mb-10">
-                            <h3 class="text-xl font-bold text-gray-900 mb-4">Day ${index + 1}</h3>
-                            <div class="space-y-6">
-                    `;
-                    
-                    activities.forEach(activity => {
-                        let timeText = '';
-                        if (activity.time) {
-                            const timeRangeMatch = activity.time.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)/i);
-                            if (timeRangeMatch) {
-                                timeText = `From ${timeRangeMatch[1].trim()} to ${timeRangeMatch[2].trim()}`;
-                            } else {
-                                timeText = activity.time;
-                            }
-                        }
-                        
-                        let description = activity.description
-                            .replace(/\*\*/g, '')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-                        
-                        dayHtml += `
-                            <div class="mb-6">
-                                <div class="text-blue-700 font-medium mb-2">${timeText}</div>
-                                <div class="text-gray-800 pl-4">
-                                    ${description}
-                                </div>
-                            </div>
-                        `;
-                    });
-                    
-                    dayHtml += `
-                            </div>
-                        </div>
-                        ${index < daySections.length - 1 ? '<hr class="my-8 border-gray-200">' : ''}
-                    `;
-                });
-                
-                if (window.marked && typeof finalItinerary === 'string') {
-                    finalItinerary = window.marked.parse(finalItinerary);
-                }
-            }
-            
+            // Show the results container
+            const resultsDiv = document.getElementById('results');
             if (resultsDiv) {
                 resultsDiv.classList.remove('hidden');
-
-                const printContent = document.createElement('div');
-                printContent.style.display = 'none';
-                printContent.innerHTML = `
-                    <div style="font-family: Arial, sans-serif; padding: 20px;">
-                        <h1 style="font-size: 1.5em; font-weight: bold; margin-bottom: 1em; text-align: center;">
-                            Your ${data.data.days}-Day Itinerary for ${data.data.destination}
-                        </h1>
-                        <div style="white-space: pre-line; line-height: 1.6;">
-                            ${typeof finalItinerary === 'string' ? finalItinerary : (formattedItinerary || 'No itinerary content available')}
-                        </div>
-                    </div>
-                `;
-                document.body.appendChild(printContent);
+                resultsDiv.innerHTML = ''; // Clear previous results
                 
-                resultsDiv.innerHTML = `
-                    <div style="white-space: pre-line; font-family: monospace; line-height: 1.5; margin-bottom: 20px;">
-                        ${typeof finalItinerary === 'string' ? finalItinerary : (formattedItinerary || 'No itinerary content available')}
-                    </div>
-                    <div style="display: flex; gap: 10px; margin-top: 1em;">
-                        <button onclick="window.print()" style="flex: 1; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                            Print Itinerary
-                        </button>
-                        <button onclick="window.location.reload()" style="flex: 1; padding: 10px; background: #4b5563; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                            Plan Another Trip
-                        </button>
-                    </div>
-                `;
+                // Create a container for the itinerary
+                const container = document.createElement('div');
+                container.className = 'bg-white p-6 rounded-lg shadow-md';
                 
-                const originalPrint = window.print;
-                window.print = function() {
-                    document.body.innerHTML = printContent.innerHTML;
-                    originalPrint();
-                    window.location.reload();
-                };
+                // Create content container first
+                const contentDiv = document.createElement('div');
+                contentDiv.id = 'itinerary-content';
+                container.appendChild(contentDiv);
                 
-                window.onafterprint = function() {
-                    window.location.reload();
-                };
+                // Add container to results
+                resultsDiv.appendChild(container);
                 
-                resultsDiv.scrollIntoView({ behavior: 'smooth' });
+                // Add title after content (will be moved to the bottom by CSS)
+                const title = document.createElement('h2');
+                title.className = 'itinerary-title text-2xl font-bold mt-8 mb-6 text-center';
+                title.textContent = `Your ${data.duration}-Day Travel Plan for ${data.destination}`;
+                container.appendChild(title);
+                
+                // Hide the generate button
+                const generateBtn = document.getElementById('generate-itinerary-btn');
+                if (generateBtn) {
+                    generateBtn.style.display = 'none';
+                }
+                
+                // Display the itinerary
+                if (data.itinerary) {
+                    displayItinerary(data.itinerary);
+                    
+                    // Show action buttons
+                    const actionButtons = document.querySelector('.action-buttons');
+                    if (actionButtons) {
+                        actionButtons.classList.remove('hidden');
+                    }
+                    
+                    // Set up download button
+                    const downloadBtn = document.getElementById('download-pdf-btn');
+                    if (downloadBtn) {
+                        downloadBtn.onclick = () => generatePDF(data.itinerary, `${city.replace(/\s+/g, '_')}_Itinerary`);
+                    }
+                }
             }
             
         } catch (error) {
-            console.error('Error:', error);
-            if (resultsDiv) {
-                resultsDiv.innerHTML = `
-                    <div class="mt-8 bg-red-50 border-l-4 border-red-400 p-4 rounded-lg">
-                        <div class="flex">
-                            <div class="flex-shrink-0">
-                                <svg class="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-                                </svg>
-                            </div>
-                            <div class="ml-3">
-                                <p class="text-sm text-red-700">
-                                    Error: ${error.message || 'Failed to generate itinerary. Please try again.'}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }
+            console.error('Error generating itinerary:', error);
+            showStatus(`Error: ${error.message || 'Failed to generate itinerary. Please try again.'}`, 'error');
         } finally {
-            button.disabled = false;
-            button.innerHTML = buttonText;
+            const generateButton = document.getElementById('generate-itinerary-btn');
+            if (generateButton) {
+                generateButton.disabled = false;
+                const buttonText = generateButton.querySelector('span');
+                const spinner = generateButton.querySelector('.spinner');
+                if (buttonText) buttonText.textContent = 'Generate travel plan';
+                if (spinner) spinner.classList.add('hidden');
+            }
         }
-    });
+    }
+    
+    function generatePDF(content, filename = 'itinerary.pdf') {
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+
+            // Set default font (don't need to load custom font)
+            doc.setFont('helvetica');
+            
+            // Add title
+            doc.setFontSize(18);
+            doc.setTextColor(40, 62, 80);
+            doc.text('Travel Itinerary', 105, 20, { align: 'center' });
+            
+            // Add content with word wrap
+            doc.setFontSize(11);
+            doc.setTextColor(0, 0, 0);
+            
+            // Split content into lines and process each line
+            const lines = content.split('\n');
+            let y = 30; // Starting Y position after title
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) {
+                    y += 5; // Add some space for empty lines
+                    continue;
+                }
+                
+                // Check if this is a day header
+                if (line.match(/^Day \d+:/i)) {
+                    doc.setFontSize(14);
+                    doc.setFont(undefined, 'bold');
+                    y += 10; // Extra space before day header
+                    doc.text(line, 20, y);
+                    y += 10;
+                    doc.setFontSize(11);
+                    doc.setFont(undefined, 'normal');
+                    continue;
+                }
+                
+                // Simple text addition with word wrap
+                const splitText = doc.splitTextToSize(line, 170);
+                doc.text(splitText, 20, y);
+                y += splitText.length * 7; // Adjust line height
+                
+                // Add page break if needed
+                if (y > 270) {  // Near bottom of A4
+                    doc.addPage();
+                    y = 20;
+                } else {
+                    y += 5; // Space between paragraphs
+                }
+            }
+            
+            doc.save(filename);
+            return true;
+            
+        } catch (error) {
+            console.error('Error generating PDF:', error);
+            showStatus('Error generating PDF. You can try printing the page instead (Ctrl+P).', 'error');
+            return false;
+        }
+    }
+    
+    function displayItinerary(itinerary) {
+        console.log('Displaying itinerary:', itinerary);
+        const resultsDiv = document.getElementById('results');
+        const itineraryDiv = document.getElementById('itinerary-content');
+        
+        if (!resultsDiv || !itineraryDiv) {
+            console.error('Required elements not found in the DOM');
+            return;
+        }
+        
+        // Clear any existing content
+        itineraryDiv.innerHTML = '';
+        
+        itineraryDiv.innerHTML = '';
+        
+        let content = itinerary;
+
+            content = content
+            .replace(/^#\s*[\d\-Day]+\s+[^\n]+/i, '')
+            .replace(/\*\*Morning([^*]+)\*\*/gi, '\nMorning $1\n')
+            .replace(/\*\*Afternoon([^*]+)\*\*/gi, '\nAfternoon $1\n')
+            .replace(/\*\*Evening([^*]+)\*\*/gi, '\nEvening $1\n')
+            .replace(/\*\*([^*]+)\*\*/g, '$1')
+            .replace(/\n{3,}/g, '\n\n');
+
+        
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'prose max-w-none';
+        
+        const lines = content.split('\n');
+        let currentSection = null;
+        
+        lines.forEach(line => {
+            line = line.trim();
+            if (!line) return;
+            
+            if (line.startsWith('## ')) {
+                if (currentSection) {
+                    contentDiv.appendChild(currentSection);
+                }
+                currentSection = document.createElement('div');
+                currentSection.className = 'mb-6 p-4 bg-gray-50 rounded-lg';
+                
+                const header = document.createElement('h2');
+                header.className = 'text-xl font-bold mb-3 text-gray-800';
+                header.textContent = line.replace('## ', '');
+                currentSection.appendChild(header);
+            }
+            // Handle time sections (Morning/Afternoon/Evening)
+            else if (line.match(/^(Morning|Afternoon|Evening)\s*\(/i)) {
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'mt-4 mb-3';
+                
+                const timeHeader = document.createElement('h4');
+                timeHeader.className = 'font-semibold text-gray-800 mb-1';
+                
+                // Extract time range from parentheses
+                const timeMatch = line.match(/(.*?)\s*\(([^)]+)\)/);
+                if (timeMatch) {
+                    timeHeader.textContent = timeMatch[1].trim();
+                    
+                    const timeRange = document.createElement('span');
+                    timeRange.className = 'text-sm font-normal text-gray-600 ml-2';
+                    timeRange.textContent = timeMatch[2].trim();
+                    timeHeader.appendChild(timeRange);
+                } else {
+                    timeHeader.textContent = line;
+                }
+                
+                timeDiv.appendChild(timeHeader);
+                
+                if (currentSection) {
+                    currentSection.appendChild(timeDiv);
+                } else {
+                    contentDiv.appendChild(timeDiv);
+                }
+            }
+            // Handle regular paragraphs
+            else {
+                const p = document.createElement('p');
+                p.className = 'mb-3 text-gray-700';
+                p.textContent = line;
+                
+                if (currentSection) {
+                    currentSection.appendChild(p);
+                } else {
+                    contentDiv.appendChild(p);
+                }
+            }
+        });
+        
+        if (currentSection) {
+            contentDiv.appendChild(currentSection);
+        }
+        
+        itineraryDiv.appendChild(contentDiv);
+        
+        if (resultsDiv) {
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+    }
 });

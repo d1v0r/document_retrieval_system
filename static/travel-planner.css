@@ -1,4 +1,3 @@
-/* Travel Planner Styles */
 .interest-btn {
     padding: 0.5rem 1rem;
     border: 1px solid #d1d5db;
@@ -45,4 +44,246 @@
 
 .selected-interest button:hover {
     color: #1e40af;
+}
+
+#sidebar {
+    transition: transform 0.3s ease-in-out;
+    overflow-y: auto;
+    height: 100vh;
+    top: 0;
+    left: 0;
+    z-index: 40;
+}
+
+#sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+#sidebar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+#sidebar::-webkit-scrollbar-thumb {
+    background: #cbd5e0;
+    border-radius: 3px;
+}
+
+#sidebar::-webkit-scrollbar-thumb:hover {
+    background: #a0aec0;
+}
+
+#documentList {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e0 #f1f1f1;
+}
+
+#documentList::-webkit-scrollbar {
+    width: 4px;
+}
+
+#documentList::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+#documentList::-webkit-scrollbar-thumb {
+    background: #cbd5e0;
+    border-radius: 3px;
+}
+
+#fileList {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e0 #f1f1f1;
+}
+
+#fileList::-webkit-scrollbar {
+    width: 4px;
+}
+
+#fileList::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+#fileList::-webkit-scrollbar-thumb {
+    background: #cbd5e0;
+    border-radius: 3px;
+}
+
+#dropZone {
+    transition: all 0.2s ease;
+}
+
+#dropZone.drag-over {
+    border-color: #4299e1;
+    background-color: #ebf8ff;
+}
+
+#documentList > div:hover {
+    background-color: #f7fafc;
+    transform: translateX(2px);
+}
+
+@media (max-width: 768px) {
+    #sidebar {
+        transform: translateX(-100%);
+    }
+    
+    #sidebar.show {
+        transform: translateX(0);
+    }
+    
+    .md\:ml-64 {
+        margin-left: 0;
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.uploading {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.loading-spinner {
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 3px solid rgba(59, 130, 246, 0.3);
+    border-radius: 50%;
+    border-top-color: #3b82f6;
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.itinerary-day {
+    margin-bottom: 2.5rem;
+    padding: 1.5rem;
+    background-color: #f9fafb;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.itinerary-day h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1f2937;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e5e7eb;
+}
+
+.itinerary-section {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.itinerary-section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.itinerary-section h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+}
+
+.itinerary-section h3 i {
+    margin-right: 0.5rem;
+    color: #3b82f6;
+}
+
+.itinerary-section p {
+    margin: 0.5rem 0;
+    line-height: 1.6;
+    color: #4b5563;
+}
+
+.itinerary-section ul {
+    margin: 0.5rem 0 0 1.25rem;
+    padding-left: 1rem;
+}
+
+.itinerary-section li {
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+}
+
+.itinerary-tips {
+    margin-top: 2rem;
+    padding: 1.25rem;
+    background-color: #eff6ff;
+    border-radius: 0.5rem;
+    border-right: 4px solid #3b82f6;
+}
+
+.itinerary-tips h3 {
+    color: #1e40af;
+    margin-top: 0;
+    margin-bottom: 1rem;
+}
+
+.itinerary-tips ul {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.itinerary-tips li {
+    margin-bottom: 0.5rem;
+    color: #1e40af;
+}
+
+@media (max-width: 768px) {
+    .itinerary-day {
+        padding: 1rem;
+    }
+    
+    .itinerary-day h2 {
+        font-size: 1.35rem;
+    }
+    
+    .itinerary-section h3 {
+        font-size: 1.15rem;
+    }
+}
+
+@media print {
+    .itinerary-day {
+        page-break-inside: avoid;
+        background-color: transparent;
+        box-shadow: none;
+        padding: 0;
+        margin-bottom: 1.5rem;
+    }
+    
+    .itinerary-day h2 {
+        color: #000;
+        border-bottom: 1px solid #000;
+    }
+    
+    .itinerary-section {
+        border-bottom: 1px solid #ddd;
+    }
+    
+    .itinerary-tips {
+        background-color: transparent;
+        border: 1px solid #000;
+    }
 }

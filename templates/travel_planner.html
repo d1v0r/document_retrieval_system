@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Travel Planner</title>
+    <link rel="icon" type="image/png" href="/static/imgs/logo.png">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/travel-planner.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+    <!-- Sidebar -->
+    <div class="fixed inset-y-0 left-0 w-64 bg-white shadow-lg transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out z-50" id="sidebar">
+        <div class="p-4">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Document Library</h2>
+            
+            <!-- Upload Section -->
+            <div class="mb-6">
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:bg-gray-50" id="dropZone">
+                    <i class="fas fa-cloud-upload-alt text-3xl text-gray-400 mb-2"></i>
+                    <p class="text-sm text-gray-600">Drag & drop files here or click to browse</p>
+                    <input type="file" id="fileInput" class="hidden" multiple>
+                </div>
+                <div class="mt-2">
+                    <button id="uploadBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                        <i class="fas fa-upload mr-2"></i> Upload Files
+                    </button>
+                </div>
+                <div id="fileList" class="mt-4 space-y-2 max-h-64 overflow-y-auto">
+                </div>
+            </div>
+            
+            <div id="uploadStatus" class="hidden">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium text-gray-700">Processing...</span>
+                    <div class="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="uploadProgress" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+            
+            <div class="mt-6">
+                <h3 class="text-sm font-medium text-gray-700 mb-2">Uploaded Documents</h3>
+                <div id="documentList" class="space-y-2 max-h-64 overflow-y-auto">
+                    <p class="text-sm text-gray-500 text-center py-4">No documents uploaded yet</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button id="sidebarToggle" class="fixed bottom-4 left-4 bg-white p-3 rounded-full shadow-lg z-40 md:hidden">
+        <i class="fas fa-bars text-gray-700"></i>
+    </button>
+
+    <div class="md:ml-64 transition-all duration-300">
+        <div class="container mx-auto px-4 py-8">
+            <h1 class="text-3xl font-bold text-center mb-8">Travel Planner</h1>
+            
+            <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-md p-6 mb-8">
+                <form id="itineraryForm" class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label for="city" class="block text-sm font-medium text-gray-700 mb-1">
+                                Destination City
+                                <input type="text" id="city" name="city" required 
+                                    placeholder="Osijek"
+                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </label>
+                        </div>
+                        
+                        <div>
+                            <label for="days" class="block text-sm font-medium text-gray-700 mb-1">
+                                Number of Days
+                                <input type="number" id="days" name="days" min="1" max="30" value="3" required
+                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Select your interests</label>
+                        <div id="interestsContainer" class="mb-4">
+                            <div class="flex flex-wrap gap-2 mb-3">
+                                <button type="button" class="interest-btn" data-interest="Museums & Galleries">🏛️ Museums & Galleries</button>
+                                <button type="button" class="interest-btn" data-interest="Food & Dining">🍽️ Food & Dining</button>
+                                <button type="button" class="interest-btn" data-interest="Outdoor Activities">🌳 Outdoor Activities</button>
+                                <button type="button" class="interest-btn" data-interest="Shopping">🛍️ Shopping</button>
+                                <button type="button" class="interest-btn" data-interest="Nightlife">🍸 Nightlife</button>
+                                <button type="button" class="interest-btn" data-interest="History & Culture">🏛️ History & Culture</button>
+                                <button type="button" class="interest-btn" data-interest="Beaches & Relaxation">🏖️ Beaches</button>
+                                <button type="button" class="interest-btn" data-interest="Adventure Sports">🏂 Adventure Sports</button>
+                                <button type="button" class="interest-btn" data-interest="Beer">🍺 Beer</button>
+                                <button type="button" class="interest-btn" data-interest="Coffee">☕ Coffee</button>
+                                <button type="button" class="interest-btn" data-interest="Dancing">💃 Dancing</button>
+                                <button type="button" class="interest-btn" data-interest="Drinking">🍻 Drinking</button>
+                            </div>
+                            
+                            <div class="mt-2">
+                                <div class="flex">
+                                    <input type="text" 
+                                        id="customInterest" 
+                                        aria-label="Add your own interest"
+                                        placeholder="Add your own interest..."
+                                        class="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                    <button type="button" 
+                                        id="addInterestBtn" 
+                                        class="px-4 py-2 bg-gray-200 text-gray-700 rounded-r-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500">
+                                        Add
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <input type="hidden" id="preferences" name="preferences">
+                        
+                        <div id="selectedInterests" class="flex flex-wrap gap-2 mt-2 min-h-10">
+                        </div>
+                        
+                        <p class="mt-2 text-sm text-gray-500">
+                            Select or add your interests to personalize your trip!
+                        </p>
+                    </div>
+                    
+                    <div class="flex justify-center">
+                        <div class="flex flex-col space-y-4 w-full max-w-md">
+                            <button type="submit" id="generate-itinerary-btn" class="w-full px-6 py-3 bg-blue-600 text-white font-medium rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                <span class="button-text">Generate travel plan</span>
+                                <span class="spinner hidden ml-2">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                </span>
+                            </button>
+                            <div class="action-buttons hidden w-full">
+                                <div class="flex space-x-4 w-full">
+                                    <button type="button" id="download-pdf-btn" class="flex-1 px-6 py-3 bg-green-600 text-white font-medium rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                                        <i class="fas fa-file-pdf mr-2"></i>Download as PDF
+                                    </button>
+                                    <button type="button" id="new-plan-btn" class="flex-1 px-6 py-3 bg-blue-600 text-white font-medium rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                        <i class="fas fa-sync-alt mr-2"></i>Generate New Plan
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+                
+                <div id="loader" class="loader hidden"></div>
+                
+                <div id="results" class="max-w-4xl mx-auto mt-8 hidden">
+                    <div class="bg-white rounded-lg shadow-md p-6">
+                        <div id="itinerary-content" class="prose max-w-none"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="bg-white py-4 mt-8 border-t border-gray-200">
+        <div class="container mx-auto px-4 text-center text-gray-600">
+            <p>@copyright by Davor Gotal</p>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="/static/NotoSans-Regular.js"></script>
+    <script src="/static/travel-planner.js"></script>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const sidebar = document.getElementById('sidebar');
+            const sidebarToggle = document.getElementById('sidebarToggle');
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            const uploadBtn = document.getElementById('uploadBtn');
+            const fileList = document.getElementById('fileList');
+            const uploadStatus = document.getElementById('uploadStatus');
+            const uploadProgress = document.getElementById('uploadProgress');
+            const documentList = document.getElementById('documentList');
+
+            sidebarToggle.addEventListener('click', () => {
+                sidebar.classList.toggle('-translate-x-full');
+            });
+
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, unhighlight, false);
+            });
+
+            function highlight() {
+                dropZone.classList.add('border-blue-500', 'bg-blue-50');
+            }
+
+            function unhighlight() {
+                dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+            }
+
+            dropZone.addEventListener('drop', handleDrop, false);
+
+            function handleDrop(e) {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                handleFiles(files);
+            }
+
+            fileInput.addEventListener('change', function() {
+                handleFiles(this.files);
+            });
+
+            dropZone.addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            uploadBtn.addEventListener('click', uploadFiles);
+
+            function handleFiles(files) {
+                fileList.innerHTML = '';
+                
+                if (files.length === 0) return;
+                
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'flex items-center justify-between p-2 bg-gray-50 rounded';
+                    fileItem.innerHTML = `
+                        <div class="flex-1 truncate">
+                            <i class="fas fa-file-alt text-gray-500 mr-2"></i>
+                            <span class="text-sm text-gray-700">${file.name}</span>
+                        </div>
+                        <span class="text-xs text-gray-500">${formatFileSize(file.size)}</span>
+                    `;
+                    fileList.appendChild(fileItem);
+                }
+            }
+
+            function formatFileSize(bytes) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            async function uploadFiles() {
+                const files = fileInput.files;
+                if (files.length === 0) return;
+
+                const formData = new FormData();
+                for (let i = 0; i < files.length; i++) {
+                    formData.append('file', files[i]);
+                }
+
+                try {
+                    uploadStatus.classList.remove('hidden');
+                    uploadBtn.disabled = true;
+                    
+                    const response = await fetch('/api/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.status === 'success') {
+                        updateDocumentList();
+                        fileInput.value = '';
+                        fileList.innerHTML = '';
+                    } else {
+                        alert('Error uploading files: ' + (result.message || 'Unknown error'));
+                    }
+                } catch (error) {
+                    console.error('Upload error:', error);
+                    alert('Error uploading files. Please try again.');
+                } finally {
+                    uploadStatus.classList.add('hidden');
+                    uploadBtn.disabled = false;
+                    uploadProgress.style.width = '0%';
+                }
+            }
+
+            async function updateDocumentList() {
+                try {
+                    const response = await fetch('/api/documents');
+                    const result = await response.json();
+                    
+                    if (result.status === 'success' && result.documents && result.documents.length > 0) {
+                        documentList.innerHTML = '';
+                        result.documents.forEach(doc => {
+                            const docItem = document.createElement('div');
+                            docItem.className = 'flex items-center justify-between p-2 bg-gray-50 rounded hover:bg-gray-100';
+                            docItem.innerHTML = `
+                                <div class="flex-1 truncate">
+                                    <i class="fas fa-file-alt text-gray-500 mr-2"></i>
+                                    <span class="text-sm text-gray-700">${doc.filename}</span>
+                                </div>
+                                <span class="text-xs text-gray-500">${formatFileSize(doc.size)}</span>
+                            `;
+                            documentList.appendChild(docItem);
+                        });
+                    } else {
+                        documentList.innerHTML = '<p class="text-sm text-gray-500 text-center py-4">No documents uploaded yet</p>';
+                    }
+                } catch (error) {
+                    console.error('Error fetching documents:', error);
+                    documentList.innerHTML = '<p class="text-sm text-red-500 text-center py-4">Error loading documents</p>';
+                }
+            }
+
+            updateDocumentList();
+        });
+    </script>
+</body>
+</html>

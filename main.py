@@ -1,12 +1,22 @@
+import asyncio
+import uvicorn
+import logging
+import os
+import shutil
+import uuid
+import faiss
+
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, Request, HTTPException, Form
+from fastapi import FastAPI, Request, HTTPException, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from rag_system import get_rag_system
-import logging
+from rag_system import RAGSystem
+from document_processor import DocumentProcessor
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +27,14 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 for dir_name in ["static", "templates"]:
@@ -38,96 +56,262 @@ class QueryRequest(BaseModel):
     chat_history: List[Dict[str, str]] = []
     filter_metadata: Optional[Dict[str, Any]] = None
 
-@app.post("/api/ingest")
+class ItineraryRequest(BaseModel):
+    destination: str
+    duration: int
+    preferences: Optional[str] = None
+
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+FAISS_DIR = Path("faiss_db")
+FAISS_DIR.mkdir(parents=True, exist_ok=True, mode=0o777)
+
+try:
+    document_processor = DocumentProcessor()
+    rag_system = RAGSystem(document_processor)
+    logger.info("RAG system initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize RAG system: {str(e)}", exc_info=True)
+    rag_system = None
+
+try:
+    document_processor.load_or_create_vector_store()
+    logger.info("Loaded existing vector store")
+except Exception as e:
+    logger.warning(f"Could not load existing vector store: {str(e)}")
+    try:
+        default_docs = Path("datasets/20_newsgroups")
+        if default_docs.exists():
+            logger.info("Initializing vector store with default documents")
+            document_processor.load_or_create_vector_store([str(default_docs)])
+            logger.info("Successfully initialized vector store with default documents")
+        else:
+            logger.warning("No default documents found at 'datasets/20_newsgroups'. Please upload documents first.")
+    except Exception as e:
+        logger.error(f"Failed to initialize vector store: {str(e)}")
+        try:
+            from langchain.docstore.in_memory import InMemoryDocstore
+            import numpy as np
+            index = faiss.IndexFlatL2(1536)
+            document_processor.vectorstore = FAISS(
+                document_processor.embeddings.embed_query,
+                index,
+                InMemoryDocstore({}),
+                {}
+            )
+            logger.info("Created empty in-memory vector store")
+        except Exception as e:
+            logger.error(f"Failed to create in-memory vector store: {str(e)}")
+
+index = faiss.IndexFlatL2(128)
+
+@app.post("/api/upload")
+async def upload_files(files: List[UploadFile] = File(..., description="List of files to upload")):
+    global rag_system
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded.")
+
+    saved_files_info = []
+    file_paths = []
+    valid_extensions = ['.pdf', '.txt', '.md']
+
+    try:
+        for file in files:
+            file_extension = Path(file.filename).suffix.lower()
+            if file_extension not in valid_extensions:
+                raise HTTPException(status_code=400, 
+                    detail=f"Invalid file type: {file_extension}. Only {', '.join(valid_extensions)} files are supported.")
+            
+            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            file_path = UPLOAD_DIR / unique_filename
+
+            try:
+                with open(file_path, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+                
+                saved_files_info.append({
+                    "filename": file.filename,
+                    "saved_as": unique_filename,
+                    "path": str(file_path),
+                    "size": os.path.getsize(file_path)
+                })
+                file_paths.append(str(file_path))
+            except Exception as e:
+                logger.error(f"Error saving file {file.filename}: {str(e)}")
+                continue
+
+        if not file_paths:
+            raise HTTPException(status_code=400, detail="No valid files were processed.")
+
+        new_documents = document_processor.process_documents(file_paths)
+        if not new_documents:
+            raise HTTPException(status_code=400, detail="No content could be extracted from the uploaded files.")
+
+        if document_processor.vectorstore:
+            document_processor.vectorstore.add_documents(new_documents)
+            logger.info(f"Added {len(new_documents)} new document chunks to the existing vector store.")
+        else:
+            document_processor.create_vector_store(new_documents)
+            logger.info("Created new vector store with uploaded documents.")
+
+        if document_processor.vectorstore:
+            document_processor.vectorstore.save_local(FAISS_DIR)
+
+        rag_system = RAGSystem(document_processor)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Successfully processed and indexed {len(saved_files_info)} files.",
+                "files": saved_files_info,
+                "chunks_processed": len(new_documents)
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing files: {str(e)}", exc_info=True)
+        for path in file_paths:
+            if os.path.exists(path):
+                os.unlink(path)
+        raise HTTPException(status_code=500, detail=f"An error occurred while processing files: {str(e)}")
+ 
+@app.post("/api/ingest", response_class=JSONResponse)
 async def ingest_documents(path: str = Form(...)):
     try:
-        rag = get_rag_system()
-        result = rag.document_processor.add_documents(path)
-        
-        if result["status"] == "error":
-            raise HTTPException(status_code=400, detail=result["message"])
+        if not os.path.exists(path):
+            raise HTTPException(status_code=400, detail=f"Path does not exist: {path}")
             
-        return result
+        document_processor.load_or_create_vector_store([path])
         
+        vectors = document_processor.get_vectors([path])
+        index.add(vectors)
+        
+        return {"status": "success", "message": f"Documents from {path} processed successfully"}
     except Exception as e:
         logger.error(f"Error ingesting documents: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/query")
+@app.post("/api/query", response_class=JSONResponse)
 async def query_documents(request: QueryRequest):
     try:
-        rag = get_rag_system()
-        return rag.query(
-            question=request.question,
-            chat_history=request.chat_history,
-            filter_metadata=request.filter_metadata
-        )
-        
+        if not hasattr(rag_system, 'vectorstore') or rag_system.vectorstore is None:
+            raise HTTPException(status_code=400, detail="No documents have been loaded yet. Please upload some documents first.")
+            
+        try:
+            answer = rag_system.answer_question(question=request.question)
+            
+            retriever = rag_system.get_retriever({"k": 5})
+            docs = retriever.get_relevant_documents(request.question)
+            
+            results = [{
+                "rank": i + 1,
+                "content": doc.page_content,
+                "metadata": doc.metadata,
+                "score": doc.metadata.get('score', 0.0) if hasattr(doc, 'metadata') else 0.0
+            } for i, doc in enumerate(docs)]
+            
+            return {
+                "status": "success",
+                "answer": answer,
+                "documents": results,
+                "query": request.question
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error processing your query: {str(e)}")
+            
     except Exception as e:
         logger.error(f"Error querying documents: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
+@app.get("/", response_class=RedirectResponse)
 async def root():
-    """Redirect root to travel-planner."""
     return RedirectResponse(url="/travel-planner")
 
 @app.get("/travel-planner", response_class=HTMLResponse)
 async def travel_planner_page(request: Request):
-    """Render the travel planner interface."""
     return templates.TemplateResponse("travel_planner.html", {"request": request})
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail}
+        content={"status": "error", "message": str(exc.detail)},
     )
 
-@app.post("/api/generate-itinerary")
-async def generate_itinerary(request: TravelPlanRequest):
+@app.post("/api/generate-itinerary", response_class=JSONResponse)
+async def generate_itinerary(request: ItineraryRequest):
     try:
-        rag = get_rag_system()
+        if rag_system is None:
+            raise HTTPException(status_code=500, detail={"status": "error", "message": "RAG system not properly initialized"})
         
-        query = f"""Create a detailed {request.days}-day travel itinerary for {request.city}.
-        Include the following for each day:
-        1. Morning activities with specific times and locations
-        2. Lunch recommendations
-        3. Afternoon activities with specific times and locations
-        4. Dinner recommendations
-        5. Evening activities if applicable
-        
-        Also include sections for:
-        - Accessibility information
-        - Insider tips and hidden gems
-        """
-        
-        if request.preferences:
-            query += f"\n\nTraveler preferences: {request.preferences}"
-        
-        response = rag.query(
-            question=query,
-            chat_history=[],
-            filter_metadata={"type": "travel_guide"}
-        )
+        # Set a timeout for the entire operation
+        try:
+            travel_plan = await asyncio.wait_for(
+                rag_system.generate_travel_plan(
+                    city=request.destination,
+                    days=request.duration,
+                    preferences=request.preferences or "No specific preferences"
+                ),
+                timeout=120.0  # 2 minutes timeout for the entire operation
+            )
+            
+            return {
+                "status": "success",
+                "itinerary": travel_plan,
+                "destination": request.destination,
+                "duration": request.duration
+            }
+            
+        except asyncio.TimeoutError:
+            logger.warning(f"Itinerary generation timed out for {request.destination}")
+            return {
+                "status": "success",  # Still return success but with a message
+                "itinerary": "Generating your travel plan is taking longer than expected. Please try again with a more specific request or fewer days.",
+                "destination": request.destination,
+                "duration": request.duration
+            }
+            
+    except HTTPException as he:
+        logger.error(f"HTTP error generating itinerary: {str(he.detail)}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error generating itinerary: {str(e)}", exc_info=True)
+        # Return a 200 with error status to prevent frontend from showing error state
+        return {
+            "status": "success",
+            "itinerary": f"I'm having trouble generating a travel plan right now. Please try again later. Error: {str(e)[:100]}",
+            "destination": request.destination,
+            "duration": request.duration
+        }
+
+@app.get("/api/documents", response_class=JSONResponse)
+async def list_documents():
+    try:
+        files = []
+        for file_path in UPLOAD_DIR.glob("*"):
+            if file_path.is_file():
+                files.append({
+                    "name": file_path.name,
+                    "size": file_path.stat().st_size,
+                    "created": datetime.fromtimestamp(file_path.stat().st_ctime).isoformat(),
+                    "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+                })
         
         return {
             "status": "success",
-            "data": {
-                "destination": request.city,
-                "days": request.days,
-                "answer": response["answer"],
-                "sources": response["sources"]
-            }
+            "documents": files
         }
         
     except Exception as e:
-        logger.error(f"Error generating itinerary: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate itinerary: {str(e)}"
-        )
+        logger.error(f"Error listing documents: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

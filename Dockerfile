@@ -1,24 +1,32 @@
-FROM python:3.9-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PATH="/home/appuser/.local/bin:${PATH}"
+
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+    echo 'Acquire::http::Dl-Limit "1000";' >> /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     curl \
-    software-properties-common \
-    git \
+    libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
 
-COPY . .
+COPY --chown=appuser:appuser requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-RUN mkdir -p /app/chroma_db /app/static /app/templates
+COPY --chown=appuser:appuser . .
 
-EXPOSE 8000
+RUN mkdir -p /app/faiss_db /app/static /app/templates /app/uploads
 
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+EXPOSE 5000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY --chown=appuser:appuser entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT "/entrypoint.sh"

@@ -33,7 +33,6 @@ A modern web application that generates personalized travel itineraries based on
 2. **Set up environment variables**:
    ```bash
    cp .env.example .env
-   # Edit .env if you need to change default settings
    ```
 
 3. **Start the application**:

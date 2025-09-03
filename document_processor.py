@@ -67,7 +67,6 @@ class DocumentProcessor:
         if not docs:
             return []
             
-        # Split documents into chunks
         texts = self.text_splitter.split_documents(docs)
         logger.info(f"Split into {len(texts)} chunks of text")
         return texts
@@ -127,19 +126,13 @@ class DocumentProcessor:
         if not self.vectorstore:
             raise ValueError("Vector store not initialized. Call load_or_create_vector_store first.")
             
-        # If the vector store has a get method, use it
         if hasattr(self.vectorstore, 'get') and callable(self.vectorstore.get):
             return self.vectorstore.get(*args, **kwargs)
             
-        # Otherwise, implement a basic get using similarity search
         if 'ids' in kwargs:
-            # If specific IDs are provided, try to get those documents
             docs = []
             for doc_id in kwargs['ids']:
-                # This is a simplified implementation - actual implementation may vary
-                # based on how your vector store handles document retrieval
                 try:
-                    # Try to get the document by ID
                     doc = self.vectorstore.docstore.search(doc_id)
                     if doc:
                         docs.append(doc)
@@ -148,5 +141,4 @@ class DocumentProcessor:
             return {"documents": [d.page_content for d in docs], 
                    "metadatas": [d.metadata for d in docs]}
         
-        # If no IDs provided, return all documents (be careful with large collections!)
         return {"documents": [], "metadatas": []}

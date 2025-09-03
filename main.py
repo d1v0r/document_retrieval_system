@@ -13,8 +13,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rag_system import RAGSystem
+
 from document_processor import DocumentProcessor
 from datetime import datetime
 
@@ -31,17 +32,32 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8001", "http://127.0.0.1:8001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
+
+app.max_upload_size = 100 * 1024 * 1024  # 100MB
 
 for dir_name in ["static", "templates"]:
     Path(dir_name).mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+class FileInfo(BaseModel):
+    filename: str
+    saved_as: str
+    path: str
+    size: int
+
+class UploadResponse(BaseModel):
+    status: str
+    message: str
+    files: List[FileInfo]
+    chunks_processed: int
 
 class TravelPlanRequest(BaseModel):
     city: str
@@ -67,13 +83,25 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FAISS_DIR = Path("faiss_db")
 FAISS_DIR.mkdir(parents=True, exist_ok=True, mode=0o777)
 
-try:
-    document_processor = DocumentProcessor()
-    rag_system = RAGSystem(document_processor)
-    logger.info("RAG system initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize RAG system: {str(e)}", exc_info=True)
-    rag_system = None
+document_processor = None
+rag_system = None
+
+def initialize_rag_system():
+    global document_processor, rag_system
+    try:
+        if document_processor is None:
+            document_processor = DocumentProcessor()
+            logger.info("Document processor initialized")
+            
+        if rag_system is None:
+            rag_system = RAGSystem.get_instance(document_processor)
+            logger.info("RAG system initialized successfully")
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize RAG system: {str(e)}", exc_info=True)
+        raise
+
+initialize_rag_system()
 
 try:
     document_processor.load_or_create_vector_store()
@@ -106,45 +134,67 @@ except Exception as e:
 
 index = faiss.IndexFlatL2(128)
 
-@app.post("/api/upload")
+@app.post("/api/upload", response_model=UploadResponse)
 async def upload_files(files: List[UploadFile] = File(..., description="List of files to upload")):
-    global rag_system
+    global rag_system, document_processor
+    logger.info(f"Received upload request with {len(files)} files")
+    
+    try:
+        initialize_rag_system()
+    except Exception as e:
+        logger.error(f"Failed to initialize RAG system: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to initialize the document processing system")
 
     if not files:
+        logger.error("No files were provided in the upload request")
         raise HTTPException(status_code=400, detail="No files were uploaded.")
 
     saved_files_info = []
     file_paths = []
-    valid_extensions = ['.pdf', '.txt', '.md']
+    valid_extensions = ['.pdf', '.txt', '.md', '.docx']
+    max_file_size = 50 * 1024 * 1024
 
     try:
         for file in files:
-            file_extension = Path(file.filename).suffix.lower()
-            if file_extension not in valid_extensions:
-                raise HTTPException(status_code=400, 
-                    detail=f"Invalid file type: {file_extension}. Only {', '.join(valid_extensions)} files are supported.")
-            
-            unique_filename = f"{uuid.uuid4()}{file_extension}"
-            file_path = UPLOAD_DIR / unique_filename
-
             try:
+                file_extension = Path(file.filename).suffix.lower()
+                if file_extension not in valid_extensions:
+                    logger.warning(f"Invalid file type: {file_extension} for file {file.filename}")
+                    continue
+                
+                file_content = await file.read()
+                file_size = len(file_content)
+                
+                if file_size > max_file_size:
+                    logger.warning(f"File {file.filename} is too large: {file_size} bytes")
+                    continue
+                
+                await file.seek(0)
+                
+                unique_filename = f"{uuid.uuid4()}{file_extension}"
+                file_path = UPLOAD_DIR / unique_filename
+                
                 with open(file_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
+                    buffer.write(file_content)
                 
                 saved_files_info.append({
                     "filename": file.filename,
                     "saved_as": unique_filename,
                     "path": str(file_path),
-                    "size": os.path.getsize(file_path)
+                    "size": file_size
                 })
                 file_paths.append(str(file_path))
+                logger.info(f"Successfully saved file: {file.filename} as {unique_filename}")
+                
             except Exception as e:
-                logger.error(f"Error saving file {file.filename}: {str(e)}")
+                logger.error(f"Error processing file {file.filename}: {str(e)}", exc_info=True)
                 continue
 
         if not file_paths:
-            raise HTTPException(status_code=400, detail="No valid files were processed.")
+            logger.error("No valid files were processed after validation")
+            raise HTTPException(status_code=400, detail="No valid files were processed. Please ensure files are PDF, TXT, MD, or DOCX and under 50MB.")
 
+        logger.info(f"Processing {len(file_paths)} documents...")
         new_documents = document_processor.process_documents(file_paths)
         if not new_documents:
             raise HTTPException(status_code=400, detail="No content could be extracted from the uploaded files.")
@@ -159,17 +209,15 @@ async def upload_files(files: List[UploadFile] = File(..., description="List of 
         if document_processor.vectorstore:
             document_processor.vectorstore.save_local(FAISS_DIR)
 
-        rag_system = RAGSystem(document_processor)
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "success",
-                "message": f"Successfully processed and indexed {len(saved_files_info)} files.",
-                "files": saved_files_info,
-                "chunks_processed": len(new_documents)
-            }
-        )
+        rag_system = RAGSystem.get_instance(document_processor)
+        
+        # Return a proper Pydantic model response
+        return {
+            "status": "success",
+            "message": f"Successfully processed and indexed {len(saved_files_info)} files.",
+            "files": saved_files_info,
+            "chunks_processed": len(new_documents)
+        }
 
     except HTTPException:
         raise
@@ -251,39 +299,26 @@ async def generate_itinerary(request: ItineraryRequest):
         if rag_system is None:
             raise HTTPException(status_code=500, detail={"status": "error", "message": "RAG system not properly initialized"})
         
-        # Set a timeout for the entire operation
-        try:
-            travel_plan = await asyncio.wait_for(
-                rag_system.generate_travel_plan(
-                    city=request.destination,
-                    days=request.duration,
-                    preferences=request.preferences or "No specific preferences"
-                ),
-                timeout=120.0  # 2 minutes timeout for the entire operation
-            )
-            
-            return {
-                "status": "success",
-                "itinerary": travel_plan,
-                "destination": request.destination,
-                "duration": request.duration
-            }
-            
-        except asyncio.TimeoutError:
-            logger.warning(f"Itinerary generation timed out for {request.destination}")
-            return {
-                "status": "success",  # Still return success but with a message
-                "itinerary": "Generating your travel plan is taking longer than expected. Please try again with a more specific request or fewer days.",
-                "destination": request.destination,
-                "duration": request.duration
-            }
+        duration = min(int(request.duration), 7)
+        
+        travel_plan = await rag_system.generate_travel_plan(
+            city=request.destination,
+            days=duration,
+            preferences=request.preferences
+        )
+        
+        return {
+            "status": "success",
+            "itinerary": travel_plan,
+            "destination": request.destination,
+            "duration": duration
+        }
             
     except HTTPException as he:
         logger.error(f"HTTP error generating itinerary: {str(he.detail)}")
         raise
     except Exception as e:
         logger.error(f"Unexpected error generating itinerary: {str(e)}", exc_info=True)
-        # Return a 200 with error status to prevent frontend from showing error state
         return {
             "status": "success",
             "itinerary": f"I'm having trouble generating a travel plan right now. Please try again later. Error: {str(e)[:100]}",

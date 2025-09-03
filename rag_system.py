@@ -14,12 +14,20 @@ class RAGSystem:
     
     def __init__(self, document_processor: DocumentProcessor):
         if RAGSystem._instance is not None:
-            raise Exception("This class is a singleton! Use get_instance() instead.")
+            raise Exception("Use get_instance()")
             
         self.document_processor = document_processor
         self.llm = OllamaLLM(
             model=os.getenv("OLLAMA_MODEL", "llama3"),
-            base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            base_url=os.getenv("OLLAMA_HOST", "http://ollama:11434"),
+            temperature=0.7,
+            top_p=0.9,
+            num_ctx=4096,
+            num_thread=4,
+            timeout=120.0,
+            num_predict=4000,
+            repeat_penalty=1.1, 
+            top_k=40 
         )
         
         self.prompt_template = ChatPromptTemplate.from_messages([
@@ -98,109 +106,134 @@ class RAGSystem:
             return f"I'm sorry, I encountered an error while processing your question: {str(e)}"
     
     async def generate_travel_plan(self, city: str, days: int, preferences: str = None) -> str:
-        """Generate a travel plan using the RAG system with fallback to direct LLM generation."""
-        use_direct_llm = False
-        
-        # Check if we have a valid vectorstore
-        has_vectorstore = hasattr(self.document_processor, 'vectorstore') and self.document_processor.vectorstore is not None
-        
-        if not has_vectorstore:
-            use_direct_llm = True
-            
         try:
-            # Initialize docs as None
+            days = min(int(days), 7)
+            
+            has_vectorstore = hasattr(self.document_processor, 'vectorstore') and self.document_processor.vectorstore is not None
+            use_direct_llm = False
             docs = None
             
-            # Skip document retrieval for now to ensure faster responses
-            # We can re-enable this later once we have a proper document store
-            if has_vectorstore and False:  # Temporarily disabled document retrieval
+            if has_vectorstore:
                 try:
-                    retriever = self.get_retriever({
-                        "k": 3,
-                        "search_type": "similarity",
-                        "fetch_k": 6
-                    })
-                    
-                    # Structured query for better retrieval
-                    query_parts = [
-                        f"{days} day travel itinerary for {city}",
-                        "Include top attractions, dining, and activities"
-                    ]
-                    if preferences:
-                        query_parts.append(f"Preferences: {preferences}")
-                    
-                    query_text = ". ".join(query_parts)
-                    
-                    # Try to get documents with a short timeout
-                    try:
-                        docs = await asyncio.wait_for(
-                            retriever.ainvoke(query_text),
-                            timeout=15.0
-                        )
-                        if not docs:
+                    if hasattr(self.document_processor.vectorstore, 'index') and hasattr(self.document_processor.vectorstore.index, 'ntotal') and self.document_processor.vectorstore.index.ntotal == 0:
+                        logger.warning("Vector store is empty, attempting to process uploaded documents")
+                        try:
+                            uploads_dir = Path("uploads")
+                            if uploads_dir.exists() and any(uploads_dir.iterdir()):
+                                file_list = [str(f) for f in uploads_dir.glob('*') if f.is_file() and f.suffix.lower() in ['.pdf', '.txt', '.md']]
+                                if file_list:
+                                    logger.info(f"Found {len(file_list)} supported files in uploads directory, processing...")
+                                    self.document_processor.load_or_create_vector_store(file_list)
+                                    logger.info("Successfully processed uploaded documents")
+                                else:
+                                    logger.warning("No supported document files found in uploads directory")
+                                    use_direct_llm = True
+                            else:
+                                logger.warning("No uploads directory found or it's empty")
+                                use_direct_llm = True
+                        except Exception as e:
+                            logger.error(f"Error processing uploaded documents: {str(e)}", exc_info=True)
                             use_direct_llm = True
-                    except (asyncio.TimeoutError, Exception) as e:
-                        logger.warning(f"Document retrieval failed, falling back to direct LLM: {str(e)}")
-                        use_direct_llm = True
+                    
+                    if not use_direct_llm:
+                        try:
+                            docs = self.document_processor.vectorstore.similarity_search(
+                                f"{city} travel guide {preferences or ''}",
+                                k=5
+                            )
+                            if not docs:
+                                logger.warning("No relevant documents found in vector store, falling back to direct LLM")
+                                use_direct_llm = True
+                        except Exception as e:
+                            logger.warning(f"Error in similarity search: {str(e)}")
+                            use_direct_llm = True
+
                 except Exception as e:
-                    logger.error(f"Error in document retrieval: {str(e)}")
+                    logger.warning(f"Error querying vector store: {str(e)}", exc_info=True)
                     use_direct_llm = True
-            
-            if use_direct_llm or not has_vectorstore or docs is None:
-                prompt = f"""Create a detailed {days}-day travel itinerary for {city} with specific times and locations.
-                
-                For each day, include:
-                - Morning (9:00 AM - 12:00 PM): Specific activity or attraction with address
-                - Lunch (12:30 PM - 2:00 PM): Restaurant recommendation with cuisine type
-                - Afternoon (2:30 PM - 6:00 PM): Attractions or activities with details
-                - Evening (7:00 PM onwards): Dinner and nightlife options
-                - Travel Tips: Transportation, local customs, or money-saving tips
-                
-                Make it practical and realistic for a tourist. Include specific names, addresses, and estimated times.
-                Focus on unique local experiences."""
+
+            if has_vectorstore and not use_direct_llm and docs:
+                try:
+                    chain = create_stuff_documents_chain(
+                        self.llm,
+                        self.travel_plan_prompt,
+                        document_prompt=ChatPromptTemplate.from_template("{page_content}")
+                    )
+                    
+                    input_data = {
+                        "city": city,
+                        "days": str(days),
+                        "preferences": preferences or "No specific preferences",
+                        "context": docs
+                    }
+                    
+                    result = await asyncio.wait_for(
+                        chain.ainvoke(input_data),
+                        timeout=300.0 
+                    )
+                    
+                    return result
+                except asyncio.TimeoutError:
+                    return "Generating your travel plan is taking longer than expected. Please try again with a more specific request or fewer days."
+                except Exception as e:
+                    logger.error(f"Error in document-based generation: {str(e)}", exc_info=True)
+                    use_direct_llm = True
+
+            if use_direct_llm or not has_vectorstore or not docs:
+                prompt = f"""Create a detailed {days}-day travel itinerary for {city}.
+
+For each day, include:
+- Morning activities (9 AM - 12 PM)
+- Lunch options
+- Afternoon activities (2 PM - 6 PM)
+- Dinner options
+- Evening activities (if any)
+
+Include practical information like:
+- Opening hours for attractions
+- Travel times between locations
+- Estimated time spent at each location
+- Any entrance fees or reservations needed
+- Any other useful tips
+
+Include specific names, addresses, and estimated times for all activities and locations."""
                 
                 if preferences:
                     prompt = f"{prompt}\n\nTraveler preferences: {preferences}. Please focus the itinerary on these interests."
                 
-                # Add specific instructions for nightlife and beer preferences
-                if 'nightlife' in preferences.lower() or 'beer' in preferences.lower():
+                if preferences and ('nightlife' in preferences.lower() or 'beer' in preferences.lower()):
                     prompt += "\n\nSince you're interested in nightlife and beer, include popular bars, pubs, or breweries in the evening sections."
                 
                 try:
-                    # First try a direct synchronous call with a reasonable timeout
                     response = await asyncio.wait_for(
                         self.llm.agenerate([prompt]),
-                        timeout=60.0  # Increased timeout to 60 seconds
+                        timeout=180.0  # Increased from 120 to 180 seconds
                     )
                     
                     if response and hasattr(response, 'generations') and response.generations:
                         full_response = response.generations[0][0].text
                         
-                        # Verify the response is complete (ends with proper punctuation or is reasonably long)
                         if len(full_response) > 100 and full_response.strip()[-1] in ('.', '!', '?'):
                             return full_response
                         
-                        # If response seems incomplete, try to complete it
-                        if len(full_response) > 50:  # If we got a substantial response
+                        if len(full_response) > 50:
                             completion_prompt = f"{prompt}\n\nComplete the following response, ensuring it ends properly:\n\n{full_response}"
                             completion_response = await asyncio.wait_for(
                                 self.llm.agenerate([completion_prompt]),
-                                timeout=30.0
+                                timeout=60.0
                             )
                             if completion_response and hasattr(completion_response, 'generations'):
                                 return completion_response.generations[0][0].text
                         
-                        return full_response  # Return what we have even if not perfectly complete
+                        return full_response
                     
-                    # Fallback to streaming if direct call fails
                     logger.warning("Direct generation failed, falling back to streaming")
                     response = ""
                     start_time = asyncio.get_event_loop().time()
                     
-                    # Stream the response with a timeout
                     async for chunk in self.llm.astream(prompt):
-                        if asyncio.get_event_loop().time() - start_time > 45:  # 45s max for streaming
-                            logger.warning("Streaming response timed out after 45 seconds")
+                        if asyncio.get_event_loop().time() - start_time > 90:  # Increased from 45 to 90 seconds
+                            logger.warning("Streaming response timed out after 90 seconds")
                             break
                         if chunk:
                             response += chunk
@@ -208,87 +241,13 @@ class RAGSystem:
                     if response.strip():
                         return response
                     
-                    return "I'm sorry, I couldn't generate a complete response. The response was truncated. Please try again or refine your request."
+                    return "I'm sorry, I couldn't generate a complete response. Please try again or refine your request."
                 except Exception as e:
                     logger.error(f"Error in direct LLM generation: {str(e)}")
-                    # Return a simple fallback response
-                    # More detailed fallback response
-                    fallback = f"""# {days}-Day {city} Itinerary
-                    
-                    ## Day 1: City Introduction
-                    
-                    **Morning (9:00 AM - 12:00 PM)**  
-                    - Start at the main square (Trg bana Jelačića)
-                    - Visit the Museum of Broken Relationships (Ćirilometodska 2)
-                    
-                    **Lunch (12:30 PM - 2:00 PM)**  
-                    - Try traditional Croatian cuisine at Vinodol (Teslina 10)
-                    
-                    **Afternoon (2:30 PM - 6:00 PM)**  
-                    - Explore the Upper Town (Gornji Grad)
-                    - Visit St. Mark's Church and the Stone Gate
-                    
-                    **Evening (7:00 PM onwards)**  
-                    - Dinner at Pod Gričkim Topom (Zakmardijeve stube 5) with city views
-                    - Drinks at Tkalčićeva Street (popular bar area)
-                    
-                    ## Day 2: Culture & Local Life
-                    
-                    **Morning (9:00 AM - 12:00 PM)**  
-                    - Visit Mirogoj Cemetery (Mirogoj 9)
-                    - Explore the Croatian Museum of Naïve Art
-                    
-                    **Lunch (12:30 PM - 2:00 PM)**  
-                    - Try štrukli at La Štruk (Skalinska 5)
-                    
-                    **Afternoon (2:30 PM - 6:00 PM)**  
-                    - Walk through Dolac Market
-                    - Visit the Museum of Contemporary Art
-                    
-                    **Evening (7:00 PM onwards)**  
-                    - Dinner at Dubravkin Put (Dubravkin put 2) for fine dining
-                    - Craft beer at The Garden Brewery (Vladimira Novaka 12a)
-                    
-                    ## Travel Tips
-                    - Use the tram system for easy transportation
-                    - Try local craft beers like Ožujsko and Karlovačko
-                    - Visit the Museum of Hangovers if you're interested in a unique experience
-                    - Try the local specialty, štrukli (cheese pastry)"""
-                    
-                    if preferences:
-                        if 'nightlife' in preferences.lower():
-                            fallback += "\n\n**Nightlife Tip:** Tkalčićeva Street and Bogovićeva Street are the main bar areas with great nightlife options."
-                        if 'beer' in preferences.lower():
-                            fallback += "\n\n**Beer Lovers:** Don't miss The Garden Brewery and Craft Room for craft beer tasting."
-                    
-                    return fallback
-            
-            if not has_vectorstore or use_direct_llm or docs is None:
-                return "I'm sorry, I couldn't generate a travel plan at this time. Please try again later."
-            
-            # Create a simpler chain for faster response
-            chain = create_stuff_documents_chain(
-                self.llm,
-                self.travel_plan_prompt,
-                document_prompt=ChatPromptTemplate.from_template("{page_content}")
-            )
-            
-            input_data = {
-                "city": city,
-                "days": str(min(int(days), 7)),  # Limit to 7 days max for generation
-                "preferences": preferences or "No specific preferences",
-                "context": docs
-            }
-            
-            result = await asyncio.wait_for(
-                chain.ainvoke(input_data),
-                timeout=120.0
-            )
-            
-            return result
-            
-        except asyncio.TimeoutError:
-            return "Generating your travel plan is taking longer than expected. Please try again with a more specific request or fewer days."
+                    return f"I apologize, but I encountered an error while generating your travel itinerary. Please try again later. Error: {str(e)[:200]}"
+
+            return "I'm sorry, but I couldn't generate a travel plan at this time. Please try again later or upload relevant travel documents first."
+
         except Exception as e:
             logger.error(f"Error generating travel plan: {str(e)}", exc_info=True)
             return f"I'm sorry, I encountered an error while generating your travel plan: {str(e)}"

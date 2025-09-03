@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             console.log('Sending upload request to /api/upload');
-            const response = await fetch('http://localhost:5000/api/upload', {
+            const response = await fetch('/api/upload', {
                 method: 'POST',
                 body: formData,
                 // Don't set Content-Type header, let the browser set it with the correct boundary
@@ -294,24 +294,18 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (!form) return;
     
-    // Add event listener for the new plan button
     if (newPlanBtn) {
         newPlanBtn.addEventListener('click', function() {
-            // Scroll to the form
             form.scrollIntoView({ behavior: 'smooth' });
-            // Reset the form
             form.reset();
-            // Clear any existing results
             const resultsDiv = document.getElementById('results');
             if (resultsDiv) {
                 resultsDiv.classList.add('hidden');
             }
-            // Clear selected interests
             const selectedInterests = document.getElementById('selectedInterests');
             if (selectedInterests) {
                 selectedInterests.innerHTML = '';
             }
-            // Reset the preferences hidden input
             const preferencesInput = document.getElementById('preferences');
             if (preferencesInput) {
                 preferencesInput.value = '';
@@ -351,16 +345,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         form.addEventListener('submit', generateItinerary);
 
-    async function generateItinerary(event) {
-        event.preventDefault();
-        
-        const city = document.getElementById('city').value.trim();
-        const days = document.getElementById('days').value;
-        const preferences = document.getElementById('preferences').value.trim();
-        const generateButton = document.getElementById('generate-itinerary-btn');
-        const spinner = generateButton ? generateButton.querySelector('.spinner') : null;
-        
-        if (spinner) spinner.classList.remove('hidden');
+    async function fetchItinerary(city, days, preferences, attempt = 1) {
+        const maxAttempts = 3;
+        const baseDelay = 2000;
         
         try {
             const response = await fetch('/api/generate-itinerary', {
@@ -378,51 +365,93 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await response.json();
             
             if (!response.ok) {
-                console.error('API Error:', data);
                 throw new Error(data.detail?.message || 'Failed to generate itinerary');
             }
             
-            // Show the results container
-            const resultsDiv = document.getElementById('results');
+            // If still processing, retry after a delay
+            if (data.status === 'processing' && attempt < maxAttempts) {
+                const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return fetchItinerary(city, days, preferences, attempt + 1);
+            }
+            
+            return data;
+            
+        } catch (error) {
+            if (attempt < maxAttempts) {
+                const delay = baseDelay * Math.pow(2, attempt - 1);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return fetchItinerary(city, days, preferences, attempt + 1);
+            }
+            throw error;
+        }
+    }
+
+    async function generateItinerary(event) {
+        event.preventDefault();
+        
+        const city = document.getElementById('city').value.trim();
+        const days = document.getElementById('days').value;
+        const preferences = document.getElementById('preferences').value.trim();
+        const generateButton = document.getElementById('generate-itinerary-btn');
+        const spinner = generateButton?.querySelector('.spinner');
+        const buttonText = generateButton?.querySelector('span');
+        
+        if (buttonText) buttonText.textContent = 'Generating...';
+        if (spinner) spinner.classList.remove('hidden');
+        if (generateButton) generateButton.disabled = true;
+        
+        const resultsDiv = document.getElementById('results');
+        if (resultsDiv) {
+            resultsDiv.classList.remove('hidden');
+            resultsDiv.innerHTML = `
+                <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-blue-400 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-3">
+                            <p class="text-sm text-blue-700">Creating your personalized travel plan. This may take a moment...</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        try {
+            const data = await fetchItinerary(city, days, preferences);
+            
             if (resultsDiv) {
-                resultsDiv.classList.remove('hidden');
-                resultsDiv.innerHTML = ''; // Clear previous results
+                resultsDiv.innerHTML = '';
                 
-                // Create a container for the itinerary
                 const container = document.createElement('div');
                 container.className = 'bg-white p-6 rounded-lg shadow-md';
                 
-                // Create content container first
                 const contentDiv = document.createElement('div');
                 contentDiv.id = 'itinerary-content';
                 container.appendChild(contentDiv);
-                
-                // Add container to results
                 resultsDiv.appendChild(container);
                 
-                // Add title after content (will be moved to the bottom by CSS)
                 const title = document.createElement('h2');
                 title.className = 'itinerary-title text-2xl font-bold mt-8 mb-6 text-center';
                 title.textContent = `Your ${data.duration}-Day Travel Plan for ${data.destination}`;
                 container.appendChild(title);
                 
-                // Hide the generate button
-                const generateBtn = document.getElementById('generate-itinerary-btn');
-                if (generateBtn) {
-                    generateBtn.style.display = 'none';
+                if (generateButton) {
+                    generateButton.style.display = 'none';
                 }
                 
-                // Display the itinerary
                 if (data.itinerary) {
                     displayItinerary(data.itinerary);
                     
-                    // Show action buttons
                     const actionButtons = document.querySelector('.action-buttons');
                     if (actionButtons) {
                         actionButtons.classList.remove('hidden');
                     }
                     
-                    // Set up download button
                     const downloadBtn = document.getElementById('download-pdf-btn');
                     if (downloadBtn) {
                         downloadBtn.onclick = () => generatePDF(data.itinerary, `${city.replace(/\s+/g, '_')}_Itinerary`);
@@ -450,34 +479,29 @@ document.addEventListener('DOMContentLoaded', function() {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
 
-            // Set default font (don't need to load custom font)
             doc.setFont('helvetica');
             
-            // Add title
             doc.setFontSize(18);
             doc.setTextColor(40, 62, 80);
             doc.text('Travel Itinerary', 105, 20, { align: 'center' });
             
-            // Add content with word wrap
             doc.setFontSize(11);
             doc.setTextColor(0, 0, 0);
             
-            // Split content into lines and process each line
             const lines = content.split('\n');
-            let y = 30; // Starting Y position after title
+            let y = 30;
             
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) {
-                    y += 5; // Add some space for empty lines
+                    y += 5;
                     continue;
                 }
                 
-                // Check if this is a day header
                 if (line.match(/^Day \d+:/i)) {
                     doc.setFontSize(14);
                     doc.setFont(undefined, 'bold');
-                    y += 10; // Extra space before day header
+                    y += 10;
                     doc.text(line, 20, y);
                     y += 10;
                     doc.setFontSize(11);
@@ -485,17 +509,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     continue;
                 }
                 
-                // Simple text addition with word wrap
                 const splitText = doc.splitTextToSize(line, 170);
                 doc.text(splitText, 20, y);
-                y += splitText.length * 7; // Adjust line height
+                y += splitText.length * 7;
                 
-                // Add page break if needed
-                if (y > 270) {  // Near bottom of A4
+                if (y > 270) {
                     doc.addPage();
                     y = 20;
                 } else {
-                    y += 5; // Space between paragraphs
+                    y += 5;
                 }
             }
             
@@ -519,7 +541,6 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // Clear any existing content
         itineraryDiv.innerHTML = '';
         
         itineraryDiv.innerHTML = '';
@@ -557,7 +578,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 header.textContent = line.replace('## ', '');
                 currentSection.appendChild(header);
             }
-            // Handle time sections (Morning/Afternoon/Evening)
             else if (line.match(/^(Morning|Afternoon|Evening)\s*\(/i)) {
                 const timeDiv = document.createElement('div');
                 timeDiv.className = 'mt-4 mb-3';
@@ -565,7 +585,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 const timeHeader = document.createElement('h4');
                 timeHeader.className = 'font-semibold text-gray-800 mb-1';
                 
-                // Extract time range from parentheses
                 const timeMatch = line.match(/(.*?)\s*\(([^)]+)\)/);
                 if (timeMatch) {
                     timeHeader.textContent = timeMatch[1].trim();
@@ -586,7 +605,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     contentDiv.appendChild(timeDiv);
                 }
             }
-            // Handle regular paragraphs
             else {
                 const p = document.createElement('p');
                 p.className = 'mb-3 text-gray-700';
